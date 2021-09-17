@@ -1,0 +1,296 @@
+#!/bin/bash
+
+## uln ::
+# (C) 2021 Chris Magyar
+# GNU General Public License v3
+
+print_help() {
+printf '\e[0;38;5;15m'
+cat <<'HELPDOC'
+NAME
+    uln - link or copy multiple files at once
+
+SYNOPSIS
+    uln <COMMAND> [OPTIONS]
+
+DESCRIPTION
+    uln is an automated symbolic link creator and/or file copier controlled by
+    a simple config file.  A file named .uln defines a set of target file
+    names along with a directory to create the corresponding links/files in.
+    Target files may be specific to the current system hostname.
+
+COMMANDS
+    init
+        Create new .uln file in current directory.
+
+    link
+        Create symbolic links defined in .uln file.
+
+    copy
+        Copy files defined in .uln file.
+
+OPTIONS
+    -c, --config <FILE>
+        Read config from FILE instead of .uln default.
+
+    -D, --dry-run
+        Perform trial run making no changes.
+
+    -H, --help
+        Display this help.
+
+FILES
+    .uln
+        The init command creates a file named .uln in the current directory.
+        This file has two sections: [dir] and [targets].
+
+        [dir]
+            This section defines the base directory to create symbolic links
+            in or copy files to.  Only the first directory listed will be used.
+
+        [targets]
+            This section is a list of target files.  Files are listed relative
+            to the current directory.  Any link created or file copied is
+            done so in a corresponding subdirectory.
+
+HOSTNAME
+    The file linked to/copied may be dependent upon the system hostname by
+    appending an underscore and the desired hostname to the file name.  For
+    example, if the [targets] section of .uln lists a file named FILE.EXT, a
+    link to/copy of a file named FILE_HOSTNAME.EXT will be created, if it
+    exists, instead of FILE.EXT.
+HELPDOC
+}
+
+# arguments:
+flag_dryrun=false
+flag_init=false
+flag_link=false
+flag_copy=false
+opt_config=
+
+# internal control:
+n_cmds=0
+n_cued=0
+n_changes=0
+n_targets=0
+host="$(</etc/hostname)"
+dir=
+targets=()
+target=
+target_dir=
+target_name=
+target_path=
+file_path=
+config='.uln'
+
+
+## functions ::
+msg() {
+	printf "\e[1;38;5;12m==> \e[0;38;5;15m$1\e[0m\n" "${@:2}"
+}
+
+msg_error() {
+	printf "\e[1;38;5;9m==> ERROR: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
+}
+
+msg2_error() {
+	printf "\e[1;38;5;9m -> \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
+}
+
+msg_warn() {
+	printf "\e[1;38;5;11m==> WARNING: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
+}
+
+msg_cmd() {
+    local arg str=$'\e[1;38;5;10m'' -$'$'\e[0;38;5;15m'
+    if [ $EUID -eq 0 ]; then
+        str=$'\e[1;38;5;9m'' -#'$'\e[0;38;5;15m'
+    fi
+    for arg in "$@"; do
+        str+=" $(printf '%q' "$arg")"
+    done
+    printf '%s\e[0m\n' "$str"
+}
+
+conf_gen() {
+    printf '[dir]\n%s\n\n[targets]\n' "$HOME" > "$1"
+}
+
+conf_parse() {
+    local conf="$(sed '/^\s*$/d' "$1")"
+    dir="$(sed -n '/^\s*\[dir\]/,/^\s*\[targets]/{//!p}' <<<"$conf" | \
+        head -n1)"
+    # parse dir:
+    dir="$(sed "s|^~|$HOME|" <<<"$dir")"
+    mapfile -t targets < <(sed '0,/^\s*\[targets\]/d' <<<"$conf" | sed 's/\/$//')
+}
+
+
+## main() ::
+while (($#)); do
+    case "$1" in
+        init)
+            flag_init=true
+            ((n_cmds++)) ;;
+        link)
+            flag_link=true
+            ((n_cmds++)) ;;
+        copy)
+            flag_copy=true
+            ((n_cmds++)) ;;
+        -c|--config)
+            shift
+            opt_config="$1" ;;
+        -D|--dryrun|--dry-run)
+            flag_dryrun=true ;;
+        -H|--help)
+            print_help
+            exit 0 ;;
+        *)
+            msg_error 'unknown option: %s' "$1"
+            exit 4 ;;
+    esac
+    # ERROR: too many actions:
+    if [ $n_cmds -gt 1 ]; then
+        msg_error 'cannot perform multiple commands'
+        exit 5
+    fi
+    shift
+done
+
+# HELP: no command:
+if [ $n_cmds -eq 0 ]; then
+    print_help
+    exit 6
+fi
+
+# set config file:
+config="${opt_config:-$config}"
+
+# init:
+if [ "$flag_init" = true ]; then
+    # ERROR: config file already exists:
+    if [ -f "$config" ]; then
+        msg_error 'file %q already exists' "$config"
+        exit 7
+    fi
+    conf_gen .uln
+    exit 0
+fi
+
+# ERROR: no config file found:
+if [ ! -f "$config" ]; then
+    msg_error 'file %q not found' "$config"
+    exit 8
+fi
+
+# check for alternate hostname:
+if [ -f /etc/hostname- ]; then
+    host="$(</etc/hostname-)"
+fi
+
+# parse n file:
+conf_parse "$config"
+
+# ERROR: no link directory specified:
+if [ -z "$dir" ]; then
+    msg_error 'link directory must be specified in .uln'
+    exit 9
+# remove trailing / from dir:
+elif [ "${dir: -1}" = '/' ]; then
+    dir="${dir:0:-1}"
+fi
+
+for target in "${targets[@]}"; do
+    # process target/file names:
+    file_path="$dir/$target"
+    file_dir="${file_path%/*}"
+    target_path="$PWD/$target"
+    target_dir="${target_path%/*}"
+    target_name="${target_path##*/}"
+
+    # check for host specific target:
+    if [[ "${target_name:1}" =~ '.' ]] &&
+    [ -f "$target_dir/${target_name%.*}_$host.${target_name##*.}" ]; then
+        target_name="${target_name%.*}_$host.${target_name##*.}"
+    elif [ -f "$target_dir/${target_name}_$host" ]; then
+        target_name="${target_name}_$host"
+    fi
+    target_path="$target_dir/$target_name"
+
+    # target exists:
+    if [ -e "$target_path" ]; then
+        ((n_targets++))
+
+        # link command:
+        if [ "$flag_link" = true ]; then
+            # file not a link or it is wrong link:
+            if [ ! -h "$file_path" ] ||
+            [ "$(readlink "$file_path")" != "$target_path" ]; then
+                ((n_cued++))
+                if [ "$flag_dryrun" = false ]; then
+                    # create link to target:
+                    if mkdir -p "${file_path%/*}" &>/dev/null &&
+                    rm -rf "$file_path" &>/dev/null &&
+                    ln -sf "$target_path" "$file_path" &>/dev/null; then
+                        msg_cmd ln -sf "$target_path" "$file_path"
+                        ((n_changes++))
+                    # cannot write link:
+                    else
+                        msg2_error 'cannot write %q' "$file_path"
+                    fi
+                else
+                    msg_cmd ln -sf "$target_path" "$file_path"
+                fi
+            fi
+
+        # copy file:
+        elif [ "$flag_copy" = true ]; then
+            # file does not exist or it is wrong:
+            if [ ! -e "$file_path" ] ||
+            ! diff -rq --no-dereference "$file_path" "$target_path" &>/dev/null; then
+                ((n_cued++))
+                if [ "$flag_dryrun" = false ]; then
+                    if mkdir -p "${file_path%/*}" &>/dev/null &&
+                    rm -rf "$file_path" &>/dev/null &&
+                    cp -r "$target_path" "$file_path" &>/dev/null; then
+                        msg_cmd cp -r "$target_path" "$file_path"
+                        ((n_changes++))
+                    else
+                        msg2_error 'cannot write %q' "$file_path"
+                    fi
+                else
+                    msg_cmd cp -r "$target_path" "$file_path"
+                fi
+            fi
+        fi
+    fi
+done
+
+msg '%d targets found' $n_targets
+
+# links created:
+if [ "$flag_link" = true ]; then
+    if [ "$flag_dryrun" = true ]; then
+        msg_warn 'dry-run: 0/%d links created' $n_cued
+    else
+        msg '%d links created' $n_changes
+    fi
+
+# copies created:
+elif [ "$flag_copy" = true ]; then
+    if [ "$flag_dryrun" = true ]; then
+        msg_warn 'dry-run: 0/%d files copied' $n_cued
+    else
+        msg '%d files copied' $n_changes
+    fi
+fi
+
+## error codes ::
+#   4   unknown argument
+#   5   too many commands
+#   6   no command
+#   7   init command selected and config file already exists
+#   8   link/copy command selected but config file does not exist
+#   9   directory not set in config file
