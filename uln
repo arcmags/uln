@@ -15,9 +15,10 @@ SYNOPSIS
 
 DESCRIPTION
     uln is an automated symbolic link creator and/or file copier controlled by
-    a simple config file.  A file named .uln defines a set of target file
-    names along with a directory to create the corresponding links/files in.
-    Target files may be specific to the current system hostname.
+    a simple config file.  A file named .uln defines a set of target file names
+    along with a directory to create the corresponding links/files in.
+    Links/copies are only created if they do not already exist, or if they
+    are incorrect.
 
 COMMANDS
     init
@@ -119,8 +120,7 @@ conf_gen() {
 
 conf_parse() {
     local conf="$(sed '/^\s*$/d' "$1")"
-    dir="$(sed -n '/^\s*\[dir\]/,/^\s*\[targets]/{//!p}' <<<"$conf" | \
-        head -n1)"
+    dir="$(sed -n '/^\s*\[dir\]/,/^\s*\[targets]/{//!p}' <<<"$conf" | head -n1)"
     # parse dir:
     dir="$(sed "s|^~|$HOME|" <<<"$dir")"
     mapfile -t targets < <(sed '0,/^\s*\[targets\]/d' <<<"$conf" | sed 's/\/$//')
@@ -225,7 +225,7 @@ for target in "${targets[@]}"; do
 
         # link command:
         if [ "$flag_link" = true ]; then
-            # file not a link or it is wrong link:
+            # file not a link or it is incorrect link:
             if [ ! -h "$file_path" ] ||
             [ "$(readlink "$file_path")" != "$target_path" ]; then
                 ((n_cued++))
@@ -247,16 +247,18 @@ for target in "${targets[@]}"; do
 
         # copy file:
         elif [ "$flag_copy" = true ]; then
-            # file does not exist or it is wrong:
+            # file does not exist or it is different:
             if [ ! -e "$file_path" ] ||
             ! diff -rq --no-dereference "$file_path" "$target_path" &>/dev/null; then
                 ((n_cued++))
                 if [ "$flag_dryrun" = false ]; then
+                    # copy target to file:
                     if mkdir -p "${file_path%/*}" &>/dev/null &&
                     rm -rf "$file_path" &>/dev/null &&
                     cp -r "$target_path" "$file_path" &>/dev/null; then
                         msg_cmd cp -r "$target_path" "$file_path"
                         ((n_changes++))
+                    # cannot write file:
                     else
                         msg2_error 'cannot write %q' "$file_path"
                     fi
