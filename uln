@@ -1,24 +1,17 @@
 #!/bin/bash
-
 ## uln ::
-# (C) 2022 Chris Magyar
-# GNU General Public License v3
 
 print_help() {
-printf '\e[0;38;5;15m'
 cat <<'HELPDOC'
 NAME
     uln - link or copy multiple files at once
 
 SYNOPSIS
-    uln <COMMAND> [OPTIONS]
+    uln <COMMAND> [OPTION...]
 
 DESCRIPTION
-    uln is an automated symbolic link creator and/or file copier controlled by
-    a simple config file.  A file named .uln defines a set of target file names
-    along with a directory to create the corresponding links/files in.
-    Links/copies are only created if they do not already exist, or if they
-    are incorrect.
+    Uln is symbolic link creator and/or file copier controlled via config file.
+    Uln reads a .uln file in the current directory and executes COMMAND.
 
 COMMANDS
     init
@@ -41,256 +34,205 @@ OPTIONS
         Display this help.
 
 FILES
-    .uln
-        The init command creates a file named .uln in the current directory.
-        This file has two sections: [dir] and [targets].
+    .uln - yaml file containing following keys:
 
-        [dir]
-            This section defines the base directory to create symbolic links
-            in or copy files to.  Only the first directory listed will be used.
+        dir
+            Directory to create symbolic links in or copy files to. Required.
 
-        [targets]
-            This section is a list of target files.  Files are listed relative
-            to the current directory.  Any link created or file copied is
-            done so in a corresponding subdirectory.
+        targets
+            List of target files relative to current directory.
 
 HOSTNAME
-    The file linked to/copied may be dependent upon the system hostname by
-    appending an underscore and the desired hostname to the file name.  For
-    example, if the [targets] section of .uln lists a file named FILE.EXT, a
-    link to/copy of a file named FILE_HOSTNAME.EXT will be created, if it
-    exists, instead of FILE.EXT.
+    The file linked/copied may be dependent upon HOSTNAME by appending
+    _HOSTNAME to filename. For example, if FILE.EXT is in targets, a link to
+    FILE_HOSTNAME.EXT will be created, if it exists, instead of FILE.EXT.
+
+REQUIRES
+    yq
 HELPDOC
 }
 
-# arguments:
-flag_dryrun=false
-flag_init=false
-flag_link=false
-flag_copy=false
-opt_config=
+# TODO: add option to select between absolute/relative links
+# TODO: list/query action
 
-# internal control:
-n_cmds=0
-n_cued=0
-n_changes=0
-n_targets=0
-host="$(</etc/hostname)"
+## internal control ::
+a=0
+arg="$1"
+args=("$@")
+arr_config=()
 dir=
-targets=()
-target=
-target_dir=
-target_name=
-target_path=
+file_config='.uln'
 file_path=
-config='.uln'
+flg_copy=false
+flg_dryrun=false
+flg_init=false
+flg_link=false
+host="$HOSTNAME"
+n_actions=0
+opt_config=
+requirements=(rsync ssh yq)
+tdir=
+tname=
+tpath=
+target=
+targets=()
+
+if [ -f /etc/hostname- ]; then
+    host="$(</etc/hostname-)"
+elif [ -f /etc/hostname ]; then
+    host="$(</etc/hostname)"
+fi
 
 ## functions ::
 msg() {
-	printf "\e[1;38;5;12m==> \e[0;38;5;15m$1\e[0m\n" "${@:2}"
+    printf "\e[1;38;5;12m==> \e[0;38;5;15m$1\e[0m\n" "${@:2}"
 }
 
 msg_error() {
-	printf "\e[1;38;5;9m==> ERROR: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
-}
-
-msg2_error() {
-	printf "\e[1;38;5;9m -> \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
+    printf "\e[1;38;5;9mE: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
 }
 
 msg_warn() {
-	printf "\e[1;38;5;11m==> WARNING: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
+    printf "\e[1;38;5;11mW: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
 }
 
 msg_cmd() {
-    local arg str=$'\e[1;38;5;10m'' -$'$'\e[0;38;5;15m'
-    if [ $EUID -eq 0 ]; then
-        str=$'\e[1;38;5;9m'' -#'$'\e[0;38;5;15m'
-    fi
-    for arg in "$@"; do
-        str+=" $(printf '%q' "$arg")"
-    done
-    printf '%s\e[0m\n' "$str"
+    local ps1=$'\e[1;38;5;10m'' :$'
+    [ $EUID -eq 0 ] && ps1=$'\e[1;38;5;9m'' :#'
+    printf '%s \e[0;38;5;15m%s\n' "$ps1" "$(printf '%q ' "$@")"
 }
 
-conf_gen() {
-    printf '[dir]\n%s\n\n[targets]\n' "$HOME" > "$1"
-}
-
-conf_parse() {
-    local conf="$(sed '/^\s*$/d' "$1")"
-    dir="$(sed -n '/^\s*\[dir\]/,/^\s*\[targets]/{//!p}' <<<"$conf" | head -n1)"
-    # parse dir:
-    dir="$(sed "s|^~|$HOME|" <<<"$dir")"
-    mapfile -t targets < <(sed '0,/^\s*\[targets\]/d' <<<"$conf" | sed 's/\/$//')
+msg2_error() {
+    printf "\e[1;38;5;9m -> \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
 }
 
 ## main ::
-while (($#)); do
-    case "$1" in
-        init)
-            flag_init=true
-            ((n_cmds++)) ;;
-        link)
-            flag_link=true
-            ((n_cmds++)) ;;
-        copy)
-            flag_copy=true
-            ((n_cmds++)) ;;
-        -c|--config)
-            shift
-            opt_config="$1" ;;
-        -D|--dryrun|--dry-run)
-            flag_dryrun=true ;;
-        -H|--help)
-            print_help
-            exit 0 ;;
-        *)
-            msg_error 'unknown option: %s' "$1"
-            exit 4 ;;
-    esac
-    # ERROR: too many actions:
-    if [ $n_cmds -gt 1 ]; then
-        msg_error 'cannot perform multiple commands'
-        exit 5
-    fi
-    shift
-done
+while [ -n "$arg" ]; do case "$arg" in
+    init)
+        flg_init=true; arg="${args[((++a))]}"; ((n_actions++)) ;;
+    link)
+        flg_link=true; arg="${args[((++a))]}"; ((n_actions++)) ;;
+    copy)
+        flg_copy=true; arg="${args[((++a))]}"; ((n_actions++)) ;;
+    -c|--config)
+        [ $# -le $((a+1)) ] && msg_error "arg required: $arg" && exit 3
+        opt_config="${args[((++a))]}"; arg="${args[((++a))]}" ;;
+    -D|--dryrun)
+        flg_dryrun=true; arg="${args[((++a))]}" ;;
+    -H|--help)
+        print_help; exit 0 ;;
+    -[DH]*)
+        if [[ ! "${arg:2:1}" =~ [DHc] ]]; then
+            msg_error "unknown option: ${arg:2:1}"; exit 3
+        fi
+        args[a--]="-${arg:2}"; arg="${arg:0:2}" ;;
+    -[c]*)
+        args[a]="${arg:2}"; arg="${arg:0:2}"; ((a--)) ;;
+    --)
+        ((a++)); break ;;
+    *)
+        break ;;
+esac; done
+args=("${args[@]:a}")
 
-# HELP: no command:
-if [ $n_cmds -eq 0 ]; then
-    print_help
-    exit 6
+for req in "${requirements[@]}"; do if ! command -v "$req" &>/dev/null; then
+    msg_error 'required: %s' "$req"
+    exit 4
+fi; done
+
+if [ ${#args[@]} -gt 0 ]; then
+    msg_error "unknown args: ${args[*]}"
+    exit 3
 fi
 
-# set config file:
-config="${opt_config:-$config}"
+if [ $n_actions -eq 0 ] || [ $n_actions -gt 1 ]; then
+    msg_error 'too many/no actions given'
+    exit 3
+fi
 
-# init:
-if [ "$flag_init" = true ]; then
-    # ERROR: config file already exists:
-    if [ -f "$config" ]; then
-        msg_error 'file %q already exists' "$config"
-        exit 7
+file_config="${opt_config:-$file_config}"
+
+if [ "$flg_init" = true ]; then
+    if [ -f "$file_config" ]; then
+        msg_error '%q already exists' "$file_config"
+        exit 3
     fi
-    conf_gen .uln
+    touch "$file_config"
+    { printf '## %s ::\n\n' "$(realpath "$file_config")"
+    printf 'dir: %s\n\ntargets:\n\n# vim:ft=yaml\n' "$HOME" ;} > "$file_config"
     exit 0
 fi
 
-# ERROR: no config file found:
-if [ ! -f "$config" ]; then
-    msg_error 'file %q not found' "$config"
-    exit 8
+if [ ! -f "$file_config" ]; then
+    msg_error "file not found: $file_config"
+    exit 3
 fi
 
-# check for alternate hostname:
-if [ -f /etc/hostname- ]; then
-    host="$(</etc/hostname-)"
+mapfile -t arr_config < <(yq -r '.dir, .targets[]' 2>/dev/null "$file_config")
+if [ ${#arr_config[@]} -lt 1 ]; then
+    msg_error "yaml error: $file_config"
+    exit 3
 fi
+dir="${arr_config[0]}"; [ "$dir" = 'null' ] && dir=
+targets=("${arr_config[@]:1}")
 
-# parse n file:
-conf_parse "$config"
-
-# ERROR: no link directory specified:
 if [ -z "$dir" ]; then
-    msg_error 'link directory must be specified in .uln'
-    exit 9
-# remove trailing / from dir:
-elif [ "${dir: -1}" = '/' ]; then
-    dir="${dir:0:-1}"
+    msg_error 'no directory'
+    exit 3
 fi
+
+[ "${dir:0:1}" = '~' ] && dir="$HOME${dir:1}"
+[ "${dir: -1}" = '/' ] && dir="${dir:0:-1}"
 
 for target in "${targets[@]}"; do
-    # process target/file names:
-    file_path="$dir/$target"
-    file_dir="${file_path%/*}"
-    target_path="$PWD/$target"
-    target_dir="${target_path%/*}"
-    target_name="${target_path##*/}"
+    [ "${target: -1}" = '/' ] && target="${target:0:-1}"
+    fpath="$dir/$target"
+    tpath="$PWD/$target"
+    tdir="${tpath%/*}"
+    tname="${tpath##*/}"
 
-    # check for host specific target:
-    if [[ "${target_name:1}" =~ '.' ]] &&
-    [ -e "$target_dir/${target_name%.*}_$host.${target_name##*.}" ]; then
-        target_name="${target_name%.*}_$host.${target_name##*.}"
-    elif [ -e "$target_dir/${target_name}_$host" ]; then
-        target_name="${target_name}_$host"
+    if [[ "${tname:1}" =~ '.' ]] && [ -e "$tdir/${tname%.*}_$host.${tname##*.}" ]; then
+        tname="${tname%.*}_$host.${tname##*.}"
+    elif [ -e "$tdir/$tname_$host" ]; then
+        tname="$tname_$host"
     fi
-    target_path="$target_dir/$target_name"
+    tpath="$tdir/$tname"
+    [ ! -e "$tpath" ] && continue
 
-    # target exists:
-    if [ -e "$target_path" ]; then
-        ((n_targets++))
-
-        # link command:
-        if [ "$flag_link" = true ]; then
-            # file not a link or it is incorrect link:
-            if [ ! -h "$file_path" ] ||
-            [ "$(readlink "$file_path")" != "$target_path" ]; then
-                ((n_cued++))
-                if [ "$flag_dryrun" = false ]; then
-                    # create link to target:
-                    if mkdir -p "${file_path%/*}" &>/dev/null &&
-                    rm -rf "$file_path" &>/dev/null &&
-                    ln -sf "$target_path" "$file_path" &>/dev/null; then
-                        msg_cmd ln -sf "$target_path" "$file_path"
-                        ((n_changes++))
-                    # cannot write link:
-                    else
-                        msg2_error 'cannot write %q' "$file_path"
-                    fi
+    if [ "$flg_link" = true ]; then
+        if [ ! -h "$fpath" ] || [ "$(readlink "$fpath")" != "$tpath" ]; then
+            if [ "$flg_dryrun" = false ]; then
+                if mkdir -p "${fpath%/*}" &>/dev/null &&
+                rm -rf "$fpath" &>/dev/null &&
+                ln -sf "$tpath" "$fpath" &>/dev/null; then
+                    msg_cmd ln -sf "$tpath" "$fpath"
                 else
-                    msg_cmd ln -sf "$target_path" "$file_path"
+                    msg2_error "cannot write: $fpath"
                 fi
+            else
+                msg_cmd ln -sf "$tpath" "$fpath"
             fi
+        fi
 
-        # copy file:
-        elif [ "$flag_copy" = true ]; then
-            # file does not exist or it is different:
-            if [ ! -e "$file_path" ] ||
-            ! diff -rq --no-dereference "$file_path" "$target_path" &>/dev/null; then
-                ((n_cued++))
-                if [ "$flag_dryrun" = false ]; then
-                    # copy target to file:
-                    if mkdir -p "${file_path%/*}" &>/dev/null &&
-                    rm -rf "$file_path" &>/dev/null &&
-                    cp -r "$target_path" "$file_path" &>/dev/null; then
-                        msg_cmd cp -r "$target_path" "$file_path"
-                        ((n_changes++))
-                    # cannot write file:
-                    else
-                        msg2_error 'cannot write %q' "$file_path"
-                    fi
+    elif [ "$flg_copy" = true ]; then
+        # TODO: cmp here instead of diff?
+        if [ ! -e "$fpath" ] ||
+        ! diff -rq --no-dereference "$fpath" "$tpath" &>/dev/null; then
+            if [ "$flg_dryrun" = false ]; then
+                if mkdir -p "${fpath%/*}" &>/dev/null &&
+                rm -rf "$fpath" &>/dev/null &&
+                cp -r "$tpath" "$fpath" &>/dev/null; then
+                    msg_cmd cp -r "$tpath" "$fpath"
                 else
-                    msg_cmd cp -r "$target_path" "$file_path"
+                    msg2_error "cannot write: $fpath"
                 fi
+            else
+                msg_cmd cp -r "$tpath" "$fpath"
             fi
         fi
     fi
 done
 
-msg '%d targets found' $n_targets
+[ "$flg_dryrun" = true ] && msg_warn 'dry-run: no files changed'
 
-# links created:
-if [ "$flag_link" = true ]; then
-    if [ "$flag_dryrun" = true ]; then
-        msg_warn 'dry-run: 0/%d links created' $n_cued
-    else
-        msg '%d links created' $n_changes
-    fi
-
-# copies created:
-elif [ "$flag_copy" = true ]; then
-    if [ "$flag_dryrun" = true ]; then
-        msg_warn 'dry-run: 0/%d files copied' $n_cued
-    else
-        msg '%d files copied' $n_changes
-    fi
-fi
-
-## error codes ::
-#   4   unknown argument
-#   5   too many commands
-#   6   no command
-#   7   init command selected and config file already exists
-#   8   link/copy command selected but config file does not exist
-#   9   directory not set in config file
+# vim:ft=bash
