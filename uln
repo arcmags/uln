@@ -168,12 +168,12 @@ if [ ! -f "$file_config" ]; then
     exit 3
 fi
 
-mapfile -t arr_config < <(yq -r '.dir, .targets[]' 2>/dev/null "$file_config")
+mapfile -t arr_config < <(yq -r '.dir//"", .targets[]' 2>/dev/null "$file_config")
 if [ ${#arr_config[@]} -lt 1 ]; then
     msg_error "yaml error: $file_config"
     exit 3
 fi
-dir="${arr_config[0]}"; [ "$dir" = 'null' ] && dir=
+dir="${arr_config[0]}"
 targets=("${arr_config[@]:1}")
 
 if [ -z "$dir" ]; then
