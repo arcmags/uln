@@ -54,6 +54,8 @@ HELPDOC
 
 # TODO: add option to select between absolute/relative links
 # TODO: list/query action
+# TODO: drop yq dependency
+# TODO: more messages?
 
 ## internal control ::
 a=0
@@ -85,7 +87,7 @@ fi
 
 ## functions ::
 msg() {
-    printf "\e[1;38;5;12m==> \e[0;38;5;15m$1\e[0m\n" "${@:2}"
+    printf "\e[1;38;5;12m=> \e[0;38;5;15m$1\e[0m\n" "${@:2}"
 }
 
 msg_error() {
@@ -97,13 +99,10 @@ msg_warn() {
 }
 
 msg_cmd() {
-    local ps1=$'\e[1;38;5;10m'' :$'
-    [ $EUID -eq 0 ] && ps1=$'\e[1;38;5;9m'' :#'
-    printf '%s \e[0;38;5;15m%s\n' "$ps1" "$(printf '%q ' "$@")"
-}
-
-msg2_error() {
-    printf "\e[1;38;5;9m -> \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
+    local ps1=$'\e[1;38;5;10m'' $'
+    [ $EUID -eq 0 ] && ps1=$'\e[1;38;5;9m'' #'
+    [ "$flg_dryrun" = true ] && ps1=$'\e[1;38;5;11m'" ${ps1: -1}"
+    printf '%s \e[0;38;5;15m%s\e[0m\n' "$ps1" "$(printf '%q ' "$@")"
 }
 
 ## main ::
@@ -135,24 +134,32 @@ while [ -n "$arg" ]; do case "$arg" in
 esac; done
 args=("${args[@]:a}")
 
+# missing requirements:
 for req in "${requirements[@]}"; do if ! command -v "$req" &>/dev/null; then
-    msg_error 'required: %s' "$req"
+    msg_error 'missing requirement: %s' "$req"
     exit 4
 fi; done
 
+# unknown args/action:
 if [ ${#args[@]} -gt 0 ]; then
     msg_error "unknown args: ${args[*]}"
     exit 3
 fi
 
-if [ $n_actions -eq 0 ] || [ $n_actions -gt 1 ]; then
-    msg_error 'too many/no actions given'
+# no action/too many actions:
+if [ $n_actions -eq 0 ]; then
+    msg_warn 'no action'
+    exit 0
+elif [ $n_actions -gt 1 ]; then
+    msg_error 'too many actions'
     exit 3
 fi
 
+# set config file from command line option:
 file_config="${opt_config:-$file_config}"
 
 if [ "$flg_init" = true ]; then
+    # create new .uln file in current directory:
     if [ -f "$file_config" ]; then
         msg_error '%q already exists' "$file_config"
         exit 3
@@ -163,12 +170,14 @@ if [ "$flg_init" = true ]; then
     exit 0
 fi
 
+# config not found:
 if [ ! -f "$file_config" ]; then
-    msg_error "file not found: $file_config"
+    msg_error "config not found: $file_config"
     exit 3
 fi
 
-mapfile -t arr_config < <(yq -r '.dir//"", .targets[]' 2>/dev/null "$file_config")
+# parse config with yq, get dir and targets[]:
+mapfile -t arr_config < <(yq -r '.dir//"", .targets[]//""' 2>/dev/null "$file_config")
 if [ ${#arr_config[@]} -lt 1 ]; then
     msg_error "yaml error: $file_config"
     exit 3
@@ -176,63 +185,77 @@ fi
 dir="${arr_config[0]}"
 targets=("${arr_config[@]:1}")
 
+# no destination directory:
 if [ -z "$dir" ]; then
-    msg_error 'no directory'
+    msg_error 'no destination directory'
     exit 3
 fi
 
+# substitute leading ~ in destination directory with $HOME:
 [ "${dir:0:1}" = '~' ] && dir="$HOME${dir:1}"
+
+# remove trailing slash from destination directory:
 [ "${dir: -1}" = '/' ] && dir="${dir:0:-1}"
 
 for target in "${targets[@]}"; do
+    # TODO: need to check if any targets contain any targets:
+
+    # remove trailing slash from target file/dir:
     [ "${target: -1}" = '/' ] && target="${target:0:-1}"
-    fpath="$dir/$target"
+
+    # set destination path:
+    dpath="$dir/$target"
+
+    # set target destination directory and name:
     tpath="$PWD/$target"
     tdir="${tpath%/*}"
     tname="${tpath##*/}"
 
+    # change target name if a target file with _HOSTNAME appended exists:
     if [[ "${tname:1}" =~ '.' ]] && [ -e "$tdir/${tname%.*}_$host.${tname##*.}" ]; then
         tname="${tname%.*}_$host.${tname##*.}"
-    elif [ -e "$tdir/$tname_$host" ]; then
-        tname="$tname_$host"
+    elif [ -e "$tdir/${tname}_$host" ]; then
+        tname="${tname}_$host"
     fi
+
+    # set and check target path:
     tpath="$tdir/$tname"
     [ ! -e "$tpath" ] && continue
 
+    # create link to target file:
     if [ "$flg_link" = true ]; then
-        if [ ! -h "$fpath" ] || [ "$(readlink "$fpath")" != "$tpath" ]; then
-            if [ "$flg_dryrun" = false ]; then
-                if mkdir -p "${fpath%/*}" &>/dev/null &&
-                rm -rf "$fpath" &>/dev/null &&
-                ln -sf "$tpath" "$fpath" &>/dev/null; then
-                    msg_cmd ln -sf "$tpath" "$fpath"
-                else
-                    msg2_error "cannot write: $fpath"
-                fi
+        # destination is not a symlink or it's pointing to the wrong target:
+        if [ ! -h "$dpath" ] || [ "$(readlink "$dpath")" != "$tpath" ]; then
+            [ "$flg_dryrun" = true ] && msg_cmd ln -sf "$tpath" "$dpath" && continue
+            # create parent directories:
+            if mkdir -p "${dpath%/*}" &>/dev/null &&
+            # remove previous file:
+            rm -rf "$dpath" &>/dev/null &&
+            # create link:
+            ln -sf "$tpath" "$dpath" &>/dev/null; then
+                msg_cmd ln -sf "$tpath" "$dpath"
             else
-                msg_cmd ln -sf "$tpath" "$fpath"
+                msg_error "unable to create link: $dpath"
             fi
         fi
 
+    # copy target file:
     elif [ "$flg_copy" = true ]; then
-        # TODO: cmp here instead of diff?
-        if [ ! -e "$fpath" ] ||
-        ! diff -rq --no-dereference "$fpath" "$tpath" &>/dev/null; then
-            if [ "$flg_dryrun" = false ]; then
-                if mkdir -p "${fpath%/*}" &>/dev/null &&
-                rm -rf "$fpath" &>/dev/null &&
-                cp -r "$tpath" "$fpath" &>/dev/null; then
-                    msg_cmd cp -r "$tpath" "$fpath"
-                else
-                    msg2_error "cannot write: $fpath"
-                fi
+        # destination file doesn't exist or it's different from target file:
+        if ! diff -rq --no-dereference "$dpath" "$tpath" &>/dev/null; then
+            [ "$flg_dryrun" = true ] && msg_cmd cp -r "$tpath" "$dpath" && continue
+            # create parent directories:
+            if mkdir -p "${dpath%/*}" &>/dev/null &&
+            # remove previous file:
+            rm -rf "$dpath" &>/dev/null &&
+            # copy file/directory:
+            cp -r "$tpath" "$dpath" &>/dev/null; then
+                msg_cmd cp -r "$tpath" "$dpath"
             else
-                msg_cmd cp -r "$tpath" "$fpath"
+                msg_error "unable to create copy: $dpath"
             fi
         fi
     fi
 done
-
-[ "$flg_dryrun" = true ] && msg_warn 'dry-run: no files changed'
 
 # vim:ft=bash
