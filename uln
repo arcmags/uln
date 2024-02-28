@@ -34,7 +34,7 @@ OPTIONS
         Display this help.
 
 FILES
-    .uln - yaml file containing following keys:
+    .uln - strict-yaml file containing following keys:
 
         dest
             Link/copy destination directory. Required.
@@ -46,16 +46,11 @@ HOSTNAME
     The file linked/copied may be dependent upon HOSTNAME by appending
     _HOSTNAME to filename. For example, if FILE.EXT is in srcs, a link to
     FILE_HOSTNAME.EXT will be created, if it exists, instead of FILE.EXT.
-
-REQUIRES
-    yq
 HELPDOC
 }
 
 # TODO: add option to select between absolute/relative links
 # TODO: list/query action
-# TODO: drop yq dependency
-# TODO: more messages?
 
 ## internal control ::
 a=0
@@ -70,19 +65,17 @@ flg_copy=false
 flg_dryrun=false
 flg_init=false
 flg_link=false
+flg_srcs=false
 host="$HOSTNAME"
+line=
+lines=
 n_actions=0
 opt_config=
-requirements=(rsync ssh yq)
-
 sdir=
 sname=
 spath=
-
 src=
 srcs=()
-
-
 
 if [ -f /etc/hostname- ]; then
     host="$(</etc/hostname-)"
@@ -139,12 +132,6 @@ while [ -n "$arg" ]; do case "$arg" in
 esac; done
 args=("${args[@]:a}")
 
-# missing requirements:
-for req in "${requirements[@]}"; do if ! command -v "$req" &>/dev/null; then
-    msg_error 'missing requirement: %s' "$req"
-    exit 4
-fi; done
-
 # unknown args/action:
 if [ ${#args[@]} -gt 0 ]; then
     msg_error "unknown args: ${args[*]}"
@@ -181,14 +168,17 @@ if [ ! -f "$file_config" ]; then
     exit 3
 fi
 
-# parse config with yq, get dest and srcs[]:
-mapfile -t arr_config < <(yq -r '.dest//"", .srcs[]//""' 2>/dev/null "$file_config")
-if [ ${#arr_config[@]} -lt 1 ]; then
-    msg_error "yaml error: $file_config"
-    exit 3
-fi
-dest="${arr_config[0]}"
-srcs=("${arr_config[@]:1}")
+# parse config:
+mapfile -t lines < <(sed -E -e 's/(^\s+|\s+$)//g' -e '/^(#|$|-$)/d' "$file_config")
+flg_srcs=false
+for line in "${lines[@]}"; do
+    if [ "$flg_srcs" = true ]; then
+        [[ "$line" =~ ^-\ +(.*) ]] && srcs+=("${BASH_REMATCH[1]}") && continue
+        flg_srcs=false
+    fi
+    [[ "$line" =~ ^dest:\ +(.*) ]] && dest="${BASH_REMATCH[1]}" && continue
+    [ "$line" = 'srcs:' ] && flg_srcs=true && continue
+done
 
 # no destination directory:
 if [ -z "$dest" ]; then

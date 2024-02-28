@@ -34,13 +34,13 @@ Target files may be dependent upon hostname by appending it to their names.
 
 ## Config
 
-*.uln* - yaml file defining target files, contains the following keys:
+*.uln* - [strictyaml][syaml] file (every value interpreted as a raw string) with the following keys:
 
 *dest*
 : Destination directory for links/copies. Required.
 
 *srcs*
-: List of target files relative to directory containing *.uln* file.
+: List of source files relative to directory containing *.uln* file.
 
 ## Hostname
 
@@ -49,16 +49,15 @@ appending an underscore and the desired hostname to the file name. For example,
 if *FILE.EXT* is in *targets*, a link to *FILE\_HOSTNAME.EXT* will be created,
 if it exists, instead of *FILE.EXT*.
 
-## Requirements
-- yq
-
 ----
 [Chris Magyar](https://mags.zone)\
 [GPL v3](https://www.gnu.org/licenses/gpl-3.0)
 
+[syaml]: https://hitchdev.com/strictyaml/
+
 <!--metadata:
 author: Chris Magyar <c.magyar.ec@gmail.com>
-description: Automated
+description: Automated symbolic link creator.
 keywords: uln, link, symbolic link
 css: ../css/main.css
 -->
