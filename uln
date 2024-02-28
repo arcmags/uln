@@ -11,7 +11,7 @@ SYNOPSIS
 
 DESCRIPTION
     Uln is symbolic link creator and/or file copier controlled via config file.
-    Uln reads a .uln file in the current directory and executes COMMAND.
+    Uln reads a .uln file in the current directory.
 
 COMMANDS
     init
@@ -36,15 +36,15 @@ OPTIONS
 FILES
     .uln - yaml file containing following keys:
 
-        dir
-            Directory to create symbolic links in or copy files to. Required.
+        dest
+            Link/copy destination directory. Required.
 
-        targets
-            List of target files relative to current directory.
+        srcs
+            Source files.
 
 HOSTNAME
     The file linked/copied may be dependent upon HOSTNAME by appending
-    _HOSTNAME to filename. For example, if FILE.EXT is in targets, a link to
+    _HOSTNAME to filename. For example, if FILE.EXT is in srcs, a link to
     FILE_HOSTNAME.EXT will be created, if it exists, instead of FILE.EXT.
 
 REQUIRES
@@ -62,7 +62,8 @@ a=0
 arg="$1"
 args=("$@")
 arr_config=()
-dir=
+dest=
+dpath=
 file_config='.uln'
 file_path=
 flg_copy=false
@@ -73,11 +74,15 @@ host="$HOSTNAME"
 n_actions=0
 opt_config=
 requirements=(rsync ssh yq)
-tdir=
-tname=
-tpath=
-target=
-targets=()
+
+sdir=
+sname=
+spath=
+
+src=
+srcs=()
+
+
 
 if [ -f /etc/hostname- ]; then
     host="$(</etc/hostname-)"
@@ -166,7 +171,7 @@ if [ "$flg_init" = true ]; then
     fi
     touch "$file_config"
     { printf '## %s ::\n\n' "$(realpath "$file_config")"
-    printf 'dir: %s\n\ntargets:\n\n# vim:ft=yaml\n' "$HOME" ;} > "$file_config"
+    printf 'dest: %s\n\nsrcs:\n\n# vim:ft=yaml\n' "$HOME" ;} > "$file_config"
     exit 0
 fi
 
@@ -176,81 +181,81 @@ if [ ! -f "$file_config" ]; then
     exit 3
 fi
 
-# parse config with yq, get dir and targets[]:
-mapfile -t arr_config < <(yq -r '.dir//"", .targets[]//""' 2>/dev/null "$file_config")
+# parse config with yq, get dest and srcs[]:
+mapfile -t arr_config < <(yq -r '.dest//"", .srcs[]//""' 2>/dev/null "$file_config")
 if [ ${#arr_config[@]} -lt 1 ]; then
     msg_error "yaml error: $file_config"
     exit 3
 fi
-dir="${arr_config[0]}"
-targets=("${arr_config[@]:1}")
+dest="${arr_config[0]}"
+srcs=("${arr_config[@]:1}")
 
 # no destination directory:
-if [ -z "$dir" ]; then
+if [ -z "$dest" ]; then
     msg_error 'no destination directory'
     exit 3
 fi
 
 # substitute leading ~ in destination directory with $HOME:
-[ "${dir:0:1}" = '~' ] && dir="$HOME${dir:1}"
+[ "${dest:0:1}" = '~' ] && dest="$HOME${dest:1}"
 
 # remove trailing slash from destination directory:
-[ "${dir: -1}" = '/' ] && dir="${dir:0:-1}"
+[ "${dest: -1}" = '/' ] && dest="${dest:0:-1}"
 
-for target in "${targets[@]}"; do
-    # TODO: need to check if any targets contain any targets:
+for src in "${srcs[@]}"; do
+    # TODO: need to check if any src contains any src:
 
-    # remove trailing slash from target file/dir:
-    [ "${target: -1}" = '/' ] && target="${target:0:-1}"
+    # remove trailing slash from src file/dir:
+    [ "${src: -1}" = '/' ] && src="${src:0:-1}"
 
     # set destination path:
-    dpath="$dir/$target"
+    dpath="$dest/$src"
 
-    # set target destination directory and name:
-    tpath="$PWD/$target"
-    tdir="${tpath%/*}"
-    tname="${tpath##*/}"
+    # set src destination directory and name:
+    spath="$PWD/$src"
+    sdir="${spath%/*}"
+    sname="${spath##*/}"
 
-    # change target name if a target file with _HOSTNAME appended exists:
-    if [[ "${tname:1}" =~ '.' ]] && [ -e "$tdir/${tname%.*}_$host.${tname##*.}" ]; then
-        tname="${tname%.*}_$host.${tname##*.}"
-    elif [ -e "$tdir/${tname}_$host" ]; then
-        tname="${tname}_$host"
+    # change src name if a src file with _HOSTNAME appended exists:
+    if [[ "${sname:1}" =~ '.' ]] && [ -e "$sdir/${sname%.*}_$host.${sname##*.}" ]; then
+        sname="${sname%.*}_$host.${sname##*.}"
+    elif [ -e "$sdir/${sname}_$host" ]; then
+        sname="${sname}_$host"
     fi
 
-    # set and check target path:
-    tpath="$tdir/$tname"
-    [ ! -e "$tpath" ] && continue
+    # set and check src path:
+    spath="$sdir/$sname"
+    [ ! -e "$spath" ] && continue
 
-    # create link to target file:
+    # create link to src file:
     if [ "$flg_link" = true ]; then
-        # destination is not a symlink or it's pointing to the wrong target:
-        if [ ! -h "$dpath" ] || [ "$(readlink "$dpath")" != "$tpath" ]; then
-            [ "$flg_dryrun" = true ] && msg_cmd ln -sf "$tpath" "$dpath" && continue
+        # destination is not a symlink or it's pointing to the wrong src:
+        if [ ! -h "$dpath" ] || [ "$(readlink "$dpath")" != "$spath" ]; then
+            [ "$flg_dryrun" = true ] && msg_cmd ln -sf "$spath" "$dpath" && continue
             # create parent directories:
             if mkdir -p "${dpath%/*}" &>/dev/null &&
             # remove previous file:
             rm -rf "$dpath" &>/dev/null &&
             # create link:
-            ln -sf "$tpath" "$dpath" &>/dev/null; then
-                msg_cmd ln -sf "$tpath" "$dpath"
+            ln -sf "$spath" "$dpath" &>/dev/null; then
+                msg_cmd ln -sf "$spath" "$dpath"
             else
                 msg_error "unable to create link: $dpath"
             fi
         fi
 
-    # copy target file:
+    # copy src file:
     elif [ "$flg_copy" = true ]; then
-        # destination file doesn't exist or it's different from target file:
-        if ! diff -rq --no-dereference "$dpath" "$tpath" &>/dev/null; then
-            [ "$flg_dryrun" = true ] && msg_cmd cp -r "$tpath" "$dpath" && continue
+        # destination file doesn't exist or it's different from src file:
+        if ! diff -rq --no-dereference "$dpath" "$spath" &>/dev/null; then
+            [ "$flg_dryrun" = true ] && msg_cmd cp -r "$spath" "$dpath" && continue
             # create parent directories:
             if mkdir -p "${dpath%/*}" &>/dev/null &&
             # remove previous file:
             rm -rf "$dpath" &>/dev/null &&
             # copy file/directory:
-            cp -r "$tpath" "$dpath" &>/dev/null; then
-                msg_cmd cp -r "$tpath" "$dpath"
+            cp -r "$spath" "$dpath" &>/dev/null; then
+                msg_cmd cp -r "$spath" "$dpath"
             else
                 msg_error "unable to create copy: $dpath"
             fi

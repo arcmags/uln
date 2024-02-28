@@ -2,8 +2,8 @@
 
 Uln is a symbolic link creator and/or file copier controlled via config file.
 
-Uln reads a *.uln* file in the current directory. This file defines target
-files for linking/coping and the base output directory for these links/files.
+Uln reads a *.uln* file in the current directory. This file defines source
+files for linking/coping and destination directory for these links/files.
 Target files may be dependent upon hostname by appending it to their names.
 
 ## Usage
@@ -36,10 +36,10 @@ Target files may be dependent upon hostname by appending it to their names.
 
 *.uln* - yaml file defining target files, contains the following keys:
 
-*dir*
-: Base directory to create links/copies in. Required.
+*dest*
+: Destination directory for links/copies. Required.
 
-*targets*
+*srcs*
 : List of target files relative to directory containing *.uln* file.
 
 ## Hostname
