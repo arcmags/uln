@@ -8,7 +8,7 @@ Target files may be dependent upon hostname by appending it to their names.
 
 ## Usage
 
-    uln <COMMAND> [OPTIONS]
+    uln <COMMAND> [OPTION...]
 
 ### Commands
 
@@ -34,7 +34,7 @@ Target files may be dependent upon hostname by appending it to their names.
 
 ## Config
 
-*.uln* - [strictyaml][syaml] file (every value interpreted as a raw string) with the following keys:
+*.uln* - [strictyaml][syaml] file with the following keys:
 
 *dest*
 : Destination directory for links/copies. Required.

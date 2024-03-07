@@ -69,7 +69,7 @@ flg_srcs=false
 host="$HOSTNAME"
 line=
 lines=
-n_actions=0
+n_acts=0
 opt_config=
 sdir=
 sname=
@@ -106,11 +106,11 @@ msg_cmd() {
 ## main ::
 while [ -n "$arg" ]; do case "$arg" in
     init)
-        flg_init=true; arg="${args[((++a))]}"; ((n_actions++)) ;;
+        flg_init=true; arg="${args[((++a))]}"; ((n_acts++)) ;;
     link)
-        flg_link=true; arg="${args[((++a))]}"; ((n_actions++)) ;;
+        flg_link=true; arg="${args[((++a))]}"; ((n_acts++)) ;;
     copy)
-        flg_copy=true; arg="${args[((++a))]}"; ((n_actions++)) ;;
+        flg_copy=true; arg="${args[((++a))]}"; ((n_acts++)) ;;
     -c|--config)
         [ $# -le $((a+1)) ] && msg_error "arg required: $arg" && exit 3
         opt_config="${args[((++a))]}"; arg="${args[((++a))]}" ;;
@@ -139,10 +139,10 @@ if [ ${#args[@]} -gt 0 ]; then
 fi
 
 # no action/too many actions:
-if [ $n_actions -eq 0 ]; then
+if [ $n_acts -eq 0 ]; then
     msg_warn 'no action'
     exit 0
-elif [ $n_actions -gt 1 ]; then
+elif [ $n_acts -gt 1 ]; then
     msg_error 'too many actions'
     exit 3
 fi
