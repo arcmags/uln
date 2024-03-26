@@ -24,14 +24,14 @@ COMMANDS
         Copy files defined in .uln file.
 
 OPTIONS
-    -c, --config <FILE>
-        Read config from FILE instead of .uln default.
-
     -D, --dry-run
         Perform trial run making no changes.
 
     -H, --help
         Display this help.
+
+    -c, --config <FILE>
+        Read config from FILE instead of .uln default.
 
 FILES
     .uln - strict-yaml file containing following keys:
@@ -77,85 +77,50 @@ spath=
 src=
 srcs=()
 
-if [ -f /etc/hostname- ]; then
-    host="$(</etc/hostname-)"
-elif [ -f /etc/hostname ]; then
-    host="$(</etc/hostname)"
-fi
+[ -f '/etc/hostname' ] && host="$(cat /etc/hostname)"
+[ -f '/etc/hostname-' ] && host="$(cat /etc/hostname-)"
 
 ## functions ::
-msg() {
-    printf "\e[1;38;5;12m=> \e[0;38;5;15m$1\e[0m\n" "${@:2}"
-}
-
-msg_error() {
-    printf "\e[1;38;5;9mE: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
-}
-
-msg_warn() {
-    printf "\e[1;38;5;11mW: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2
-}
-
+msg() { printf "\e[1;38;5;12m=> \e[0;38;5;15m$1\e[0m\n" "${@:2}" ;}
+msg_error() { printf "\e[1;38;5;9mE: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2 ;}
+msg_warn() { printf "\e[1;38;5;11mW: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2 ;}
 msg_cmd() {
-    local ps1=$'\e[1;38;5;10m'' $'
-    [ $EUID -eq 0 ] && ps1=$'\e[1;38;5;9m'' #'
-    [ "$flg_dryrun" = true ] && ps1=$'\e[1;38;5;11m'" ${ps1: -1}"
-    printf '%s \e[0;38;5;15m%s\e[0m\n' "$ps1" "$(printf '%q ' "$@")"
+    local clr=$'\e[1;38;5;10m' txt=' $'
+    [ $EUID -eq 0 ] && clr=$'\e[1;38;5;9m' txt=' #'
+    [ "$flg_dryrun" = true ] && clr=$'\e[1;38;5;11m'
+    printf '%s%s \e[0;38;5;15m%s\e[0m\n' "$clr" "$txt" "$(printf '%q ' "$@")"
 }
+error() { msg_error "$@"; exit 5 ;}
 
 ## main ::
 while [ -n "$arg" ]; do case "$arg" in
-    init)
-        flg_init=true; arg="${args[((++a))]}"; ((n_acts++)) ;;
-    link)
-        flg_link=true; arg="${args[((++a))]}"; ((n_acts++)) ;;
-    copy)
-        flg_copy=true; arg="${args[((++a))]}"; ((n_acts++)) ;;
+    init) flg_init=true; arg="${args[((++a))]}"; ((n_acts++)) ;;
+    link) flg_link=true; arg="${args[((++a))]}"; ((n_acts++)) ;;
+    copy) flg_copy=true; arg="${args[((++a))]}"; ((n_acts++)) ;;
+    -D|--dryrun) flg_dryrun=true; arg="${args[((++a))]}" ;;
+    -H|--help) print_help; exit 0 ;;
     -c|--config)
-        [ $# -le $((a+1)) ] && msg_error "arg required: $arg" && exit 3
+        [ $# -le $((a+1)) ] && error "arg required: $arg"
         opt_config="${args[((++a))]}"; arg="${args[((++a))]}" ;;
-    -D|--dryrun)
-        flg_dryrun=true; arg="${args[((++a))]}" ;;
-    -H|--help)
-        print_help; exit 0 ;;
     -[DH]*)
-        if [[ ! "${arg:2:1}" =~ [DHc] ]]; then
-            msg_error "unknown option: ${arg:2:1}"; exit 3
-        fi
+        [[ ! "${arg:2:1}" =~ [DHc] ]] && error "unknown option: ${arg:2:1}"
         args[a--]="-${arg:2}"; arg="${arg:0:2}" ;;
-    -[c]*)
-        args[a]="${arg:2}"; arg="${arg:0:2}"; ((a--)) ;;
-    --)
-        ((a++)); break ;;
-    *)
-        break ;;
+    -[c]*) args[a]="${arg:2}"; arg="${arg:0:2}"; ((a--)) ;;
+    --) ((a++)); break ;;
+    *) break ;;
 esac; done
 args=("${args[@]:a}")
 
-# unknown args/action:
-if [ ${#args[@]} -gt 0 ]; then
-    msg_error "unknown args: ${args[*]}"
-    exit 3
-fi
-
-# no action/too many actions:
-if [ $n_acts -eq 0 ]; then
-    msg_warn 'no action'
-    exit 0
-elif [ $n_acts -gt 1 ]; then
-    msg_error 'too many actions'
-    exit 3
-fi
+[ ${#args[@]} -gt 0 ] && error "unknown args: ${args[*]}"
+[ $n_acts -eq 0 ] && error 'no action'
+[ $n_acts -gt 1 ] && error 'too many actions'
 
 # set config file from command line option:
 file_config="${opt_config:-$file_config}"
 
 if [ "$flg_init" = true ]; then
     # create new .uln file in current directory:
-    if [ -f "$file_config" ]; then
-        msg_error '%q already exists' "$file_config"
-        exit 3
-    fi
+    [ -f "$file_config" ] && error "$file_config already exists"
     touch "$file_config"
     { printf '## %s ::\n\n' "$(realpath "$file_config")"
     printf 'dest: %s\n\nsrcs:\n\n# vim:ft=yaml\n' "$HOME" ;} > "$file_config"
@@ -163,10 +128,7 @@ if [ "$flg_init" = true ]; then
 fi
 
 # config not found:
-if [ ! -f "$file_config" ]; then
-    msg_error "config not found: $file_config"
-    exit 3
-fi
+[ ! -f "$file_config" ] && error "config not found: $file_config"
 
 # parse config:
 mapfile -t lines < <(sed -E -e 's/(^\s+|\s+$)//g' -e '/^(#|$|-$)/d' "$file_config")
@@ -181,10 +143,7 @@ for line in "${lines[@]}"; do
 done
 
 # no destination directory:
-if [ -z "$dest" ]; then
-    msg_error 'no destination directory'
-    exit 3
-fi
+[ -z "$dest" ] && error 'no destination directory'
 
 # substitute leading ~ in destination directory with $HOME:
 [ "${dest:0:1}" = '~' ] && dest="$HOME${dest:1}"
