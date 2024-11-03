@@ -8,7 +8,7 @@ Target files may be dependent upon hostname by appending it to their names.
 
 ## Usage
 
-    uln <COMMAND> [OPTION...]
+    $ uln <COMMAND> [OPTION...]
 
 ### Commands
 
@@ -34,30 +34,28 @@ Target files may be dependent upon hostname by appending it to their names.
 
 ## Config
 
-*.uln* - [strictyaml][syaml] file with the following keys:
+*.uln* - yaml file containing following keys:
 
 *dest*
-: Destination directory for links/copies. Required.
+: Links/copy destination directory. (required)
 
 *srcs*
-: List of source files relative to directory containing *.uln* file.
+: List of source files. (required)
 
 ## Hostname
 
-The files linked to/copied from may be dependent upon the system hostname by
-appending an underscore and the desired hostname to the file name. For example,
-if *FILE.EXT* is in *targets*, a link to *FILE\_HOSTNAME.EXT* will be created,
-if it exists, instead of *FILE.EXT*.
+The file linked to/copied may be dependent upon system hostname by appending an
+underscore and the desired hostname to the file name.
+
+For example, if *FILE.EXT* is in *srcs* and a *FILE\_HOSTNAME.EXT* exists, uln
+will link/copy that file instead of *FILE.EXT*.
 
 ----
 [Chris Magyar](https://mags.zone)\
-[GPL v3](https://www.gnu.org/licenses/gpl-3.0)
-
-[syaml]: https://hitchdev.com/strictyaml/
+[GPLv3](https://www.gnu.org/licenses/gpl-3.0)
 
 <!--metadata:
 author: Chris Magyar <c.magyar.ec@gmail.com>
 description: Automated symbolic link creator.
 keywords: uln, link, symbolic link
-css: ../css/main.css
 -->
