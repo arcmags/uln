@@ -3,14 +3,15 @@
 
 print_help() { cat <<'HELPDOC'
 NAME
-    uln - link or copy multiple files at once
+    uln - create symbolic links from a list of files
 
 SYNOPSIS
-    uln <COMMAND> [OPTION...]
+    uln <command> [option...]
 
 DESCRIPTION
-    Uln is symbolic link creator and/or file copier controlled via config file.
-    Uln reads a .uln file in the current directory.
+    Uln is symbolic link creator (or file copier) controlled via config file.
+    Uln looks for a file named .uln in the current directory that defines a
+    root link/copy destination directory and a list of target source files.
 
 COMMANDS
     init
@@ -23,90 +24,122 @@ COMMANDS
         Copy files defined in .uln file.
 
 OPTIONS
-    -c, --config <FILE>
-        Read config from FILE instead of .uln default.
-
-    -D, --dry-run
+    -D, --dryrun
         Perform trial run making no changes.
+
+    -V, --verbose
+        Print existing links/copies.
+
+    -c, --config <file>
+        Source alternative config file.
+
+    -d, --dir <directory>
+        Set root destination directory.
+
+    -s, --src <file>
+        Add to list of source files.
 
     -H, --help
         Display this help.
 
 FILES
-    .uln - yaml file containing following keys:
+    .uln - yaml file containing the following keys:
 
-        dest
+        dest or dir
             Link/copy destination directory. (required)
 
         srcs
-            List of source files. (required)
+            List of source files relative to the current directory. (optional)
 
 HOSTNAME
-    The file linked/copied may be dependent upon HOSTNAME by appending
-    _HOSTNAME to filename.
+    Created links/copies may be dependent upon system hostname by appending an
+    underscore and the hostname to source filenames.
 
-    For example, if FILE.EXT is in srcs and a FILE_HOSTNAME.EXT exists, uln
-    will link/copy that file instead of FILE.EXT.
+    For example, if file.txt is listed in srcs, uln will create a link to
+    file_<hostname>.txt, if it exists, instead of file.txt.
 HELPDOC
-}
+}; [ "$0" != "$BASH_SOURCE" ] && { print_help; return 0 ;}
 
 # TODO: add option to select between absolute/relative links
-# TODO: --debug option
 
-## control ::
-dest=
+## variables ::
+# args:
+arg_flgs='DV'
+arg_opts='cds'
+flg_copy=false
+flg_dryrun=false
+flg_init=false
+flg_link=false
+flg_verbose=false
+opt_config=
+opt_dir=
+opt_srcs=()
+
+# internal:
+dir=
 dpath=
 conf='.uln'
-host="$HOSTNAME"
+lhost="$HOSTNAME"
 line=
 lines=()
 n_cmds=0
-opt_config=
 sdir=
 sname=
 spath=
 src=
 srcs=()
 in_src=false
-
-# args:
-a=0 arg="$1" args=("$@")
-flg_copy=false
-flg_dryrun=false
-flg_init=false
-flg_link=false
+n_new=0
+n_done=0
 
 ## functions ::
+error() { msg_error "$@"; exit 5 ;}
 is_cmd() { command -v "$1" &>/dev/null ;}
+
+# messages:
 msg() { printf "\e[1;38;5;12m=> \e[0;38;5;15m$1\e[0m\n" "${@:2}" ;}
 msg2() { printf '\e[1;38;5;12m > \e[0;38;5;15m%s\e[0m\n' "$*" ;}
-msg_cmd() { printf '\e[1;38;5;12m $\e[0;38;5;15m'; printf ' %q' "$@"; printf '\n' ;}
-[ $EUID -eq 0 ] && msg_cmd() { printf '\e[1;38;5;9m $\e[0;38;5;15m'; printf ' %q' "$@"; printf '\n' ;}
+msg_cmd() {
+    [ $EUID -eq 0 ] && printf '\e[1;38;5;9m #' || printf '\e[1;38;5;12m $'
+    printf ' \e[0;38;5;15m'; for a in "${@:1:1}"; do printf '%q' "$a"; done
+    for a in "${@:2}"; do printf ' %q' "$a"; done; printf '\e[0m\n'
+}
+msg_debug() { printf "[%d] %s\n" $BASH_LINENO "$*" ;}
 msg_error() { printf "\e[1;38;5;9mE: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2 ;}
 msg_warn() { printf "\e[1;38;5;11mW: \e[0;38;5;15m$1\e[0m\n" "${@:2}" >&2 ;}
-error() { msg_error "$@"; exit 5 ;}
+
+## arg parser ::
+a=0 arg="$1" args=("$@") arg_flgs="H$arg_flgs" n_args=$# opt= pargs=()
+error_arg() { error "option requires an argument: $*" ;}
+error_opt() { error "unrecognized option: $*" ;}
+parse_flg() { arg="${args[((++a))]}"; }
+parse_opt() {
+    [ $n_args -le $((a+1)) ] && error_arg "$arg"
+    opt="${args[((++a))]}"; arg="${args[((++a))]}"
+}
 
 ## main ::
 while [ -n "$arg" ]; do case "$arg" in
-    init) flg_init=true; arg="${args[((++a))]}"; ((n_cmds++)) ;;
-    link) flg_link=true; arg="${args[((++a))]}"; ((n_cmds++)) ;;
-    copy) flg_copy=true; arg="${args[((++a))]}"; ((n_cmds++)) ;;
-    -D|--dryrun) flg_dryrun=true; arg="${args[((++a))]}" ;;
-    -H|--help) print_help; exit 0 ;;
-    -c|--config)
-        [ $# -le $((a+1)) ] && error "arg required: $arg"
-        opt_config="${args[((++a))]}"; arg="${args[((++a))]}" ;;
-    -[DH]*)
-        [[ ! "${arg:2:1}" =~ [DHc] ]] && error "unknown option: ${arg:2:1}"
-        args[a--]="-${arg:2}"; arg="${arg:0:2}" ;;
-    -[c]*) args[a]="${arg:2}"; arg="${arg:0:2}"; ((a--)) ;;
-    --) ((a++)); break ;;
-    *) break ;;
+    init) parse_flg; flg_init=true; ((n_cmds++));;
+    link) parse_flg; flg_link=true; ((n_cmds++));;
+    copy) parse_flg; flg_copy=true; ((n_cmds++));;
+    -D|--dryrun|--dry-run) parse_flg; flg_dryrun=true;;
+    -V|--verbose) parse_flg; flg_verbose=true;;
+    -c|--config) parse_opt; opt_config="$opt";;
+    -d|--dir|--dest) parse_opt; opt_dir="$opt";;
+    -s|--src|--source) parse_opt; opt_srcs+=("$opt");;
+    -H*|--help) print_help; exit 0;;
+    -[$arg_flgs]*)
+        [[ "$arg_flgs$arg_opts" =~ "${arg:2:1}" ]] || error_opt "-${arg:2:1}"
+        args[a--]="-${arg:2}"; arg="${arg:0:2}";;
+    -[$arg_opts]*) args[a]="${arg:2}"; arg="${arg:0:2}"; ((a--));;
+    --) ((a++)); break;;
+    *) break;;
 esac; done
-args=("${args[@]:a}")
+pargs=("${args[@]:a}")
 
 # args error:
-[ ${#args[@]} -gt 0 ] && error "unknown args: ${args[*]}"
+[ ${#pargs[@]} -gt 0 ] && error_opt "${pargs[0]}"
 [ $n_cmds -eq 0 ] && msg_warn 'no command' && exit 9
 [ $n_cmds -gt 1 ] && error 'too many commands'
 
@@ -118,7 +151,9 @@ if [ "$flg_init" = true ]; then
     [ -f "$conf" ] && error "$conf already exists"
     touch "$conf"
     { printf '## %s ::\n\n' "$(realpath "$conf")"
-    printf 'dest: %s\n\nsrcs:\n\n# vim:ft=yaml\n' "$HOME" ;} > "$conf"
+    printf 'dir: %s\nsrcs:\n' "$HOME"
+    for s in "${opt_srcs[@]}"; do printf '%s %s\n' '-' "$s"; done
+    printf '\n# vim:ft=yaml\n' "$HOME" ;} > "$conf"
     exit 0
 fi
 
@@ -127,32 +162,47 @@ fi
 
 # parse config:
 mapfile -t lines < <(sed -E -e 's/(^\s+|\s+$)//g' -e '/^(#|$|-$)/d' "$conf")
-in_src=false
+in_srcs=false
 for line in "${lines[@]}"; do
-    if [ "$in_src" = true ]; then
+    if [ "$in_srcs" = true ]; then
         [[ "$line" =~ ^-\ +(.*) ]] && srcs+=("${BASH_REMATCH[1]}") && continue
-        in_src=false
+        in_srcs=false
     fi
-    [[ "$line" =~ ^dest:\ +(.*) ]] && dest="${BASH_REMATCH[1]}" && continue
-    [ "$line" = 'srcs:' ] && in_src=true && continue
+    [[ "$line" =~ ^dest:\ +(.*) ]] && dir="${BASH_REMATCH[1]}" && continue
+    [[ "$line" =~ ^dir:\ +(.*) ]] && dir="${BASH_REMATCH[1]}" && continue
+    [ "$line" = 'srcs:' ] && in_srcs=true && continue
 done
-[ "${dest:0:1}" = '~' ] && dest="$HOME${dest:1}"
-[ "${dest: -1}" = '/' ] && dest="${dest:0:-1}"
+
+# set options from command line args:
+dir="${opt_dir:-$dir}"
+srcs+=("${opt_srcs[@]}")
+
+# replace leading ~ with $HOME and remove trailing / from dir:
+[ "${dir:0:1}" = '~' ] && dir="$HOME${dir:1}"
+[ "${dir: -1}" = '/' ] && dir="${dir:0:-1}"
 
 # no destination directory:
-[ -z "$dest" ] && error 'no destination directory'
+[ -z "$dir" ] && error 'no destination directory'
 
-# resolve host:
-[ -f '/etc/hostname' ] && host="$(cat /etc/hostname)"
-[ -f '/etc/hostname-' ] && host="$(cat /etc/hostname-)"
+# resolve lhost:
+[ -f '/etc/hostname' ] && lhost="$(cat /etc/hostname)"
+[ -f '/etc/hostname-' ] && lhost="$(cat /etc/hostname-)"
+
+# message:
+if [ "$flg_link" = true ]; then
+    msg "creating links in $dir ..."
+elif [ "$flg_copy" = true ]; then
+    msg "copying files to $dir ..."
+fi
 
 for src in "${srcs[@]}"; do
     # TODO: check if any src contains any src:
     # remove trailing slash from src file/dir:
     [ "${src: -1}" = '/' ] && src="${src:0:-1}"
 
-    # set destination path:
-    dpath="$dest/$src"
+    # set destination path and dir:
+    dpath="$dir/$src"
+    ddir="${dpath%/*}"
 
     # set src destination directory and name:
     spath="$PWD/$src"
@@ -160,50 +210,52 @@ for src in "${srcs[@]}"; do
     sname="${spath##*/}"
 
     # change src name if a src file with _HOSTNAME appended exists:
-    if [[ "${sname:1}" =~ '.' ]] && [ -e "$sdir/${sname%.*}_$host.${sname##*.}" ]; then
-        sname="${sname%.*}_$host.${sname##*.}"
-    elif [ -e "$sdir/${sname}_$host" ]; then
-        sname="${sname}_$host"
+    if [[ "${sname:1}" =~ '.' ]] && [ -e "$sdir/${sname%.*}_$lhost.${sname##*.}" ]; then
+        sname="${sname%.*}_$lhost.${sname##*.}"
+    elif [ -e "$sdir/${sname}_$lhost" ]; then
+        sname="${sname}_$lhost"
     fi
 
     # set and check src path:
     spath="$sdir/$sname"
     [ ! -e "$spath" ] && continue
 
-    # create link to src file:
+    # link/copy already exists:
     if [ "$flg_link" = true ]; then
-        # destination is not a symlink or it's pointing to the wrong src:
-        if [ ! -h "$dpath" ] || [ "$(readlink "$dpath")" != "$spath" ]; then
-            [ "$flg_dryrun" = true ] && msg_cmd ln -sf "$spath" "$dpath" && continue
-            # create parent directories:
-            if mkdir -p "${dpath%/*}" &>/dev/null &&
-            # remove previous file:
-            rm -rf "$dpath" &>/dev/null &&
-            # create link:
-            ln -sf "$spath" "$dpath" &>/dev/null; then
-                msg_cmd ln -sf "$spath" "$dpath"
-            else
-                msg_error "unable to create link: $dpath"
-            fi
+        if [ -h "$dpath" ] && [ "$(readlink "$dpath")" = "$spath" ]; then
+            [ "$flg_verbose" = true ] && msg2 "link found: $spath"
+            continue
         fi
-
-    # copy src file:
     elif [ "$flg_copy" = true ]; then
-        # destination file doesn't exist or it's different from src file:
-        if ! diff -rq --no-dereference "$dpath" "$spath" &>/dev/null; then
-            [ "$flg_dryrun" = true ] && msg_cmd cp -r "$spath" "$dpath" && continue
-            # create parent directories:
-            if mkdir -p "${dpath%/*}" &>/dev/null &&
-            # remove previous file:
-            rm -rf "$dpath" &>/dev/null &&
-            # copy file/directory:
-            cp -r "$spath" "$dpath" &>/dev/null; then
-                msg_cmd cp -r "$spath" "$dpath"
-            else
-                msg_error "unable to create copy: $dpath"
-            fi
+        if diff -rq --no-dereference "$dpath" "$spath" &>/dev/null; then
+            [ "$flg_verbose" = true ] && msg2 "copy found: $spath"
+            continue
         fi
     fi
+
+    # create directory:
+    if [ ! -d "$ddir" ]; then
+        [ "$flg_verbose" = true ] && msg_cmd mkdir -p "$ddir"
+        [ "$flg_dryrun" != true ] && mkdir -p "$ddir"
+    fi
+
+    # remove existing file/dir:
+    if [ -e "$dpath" ]; then
+        [ "$flg_verbose" = true ] && msg_cmd rm -rf "$dpath"
+        [ "$flg_dryrun" != true ] && rm -rf "$dpath"
+    fi
+
+    # create link/copy:
+    if [ "$flg_link" = true ]; then
+        msg_cmd ln -sf "$spath" "$dpath"
+        [ "$flg_dryrun" != true ] && ln -sf "$spath" "$dpath"
+    elif [ "$flg_copy" = true ]; then
+        msg_cmd cp -r "$spath" "$dpath"
+        cp -r "$spath" "$dpath"
+    fi
 done
+
+# dryrun warning:
+[ "$flg_dryrun" = true ] && msg_warn 'dryrun'
 
 # vim:ft=bash
